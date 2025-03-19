@@ -1,3 +1,6 @@
 img
 data
 eeglab_current
+.venv
+.vscode
+*.png
