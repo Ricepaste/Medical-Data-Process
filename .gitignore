@@ -3,3 +3,6 @@ data
 eeglab_current
 brainbit
 ganglion
+.venv
+.vscode
+*.png
