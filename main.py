@@ -1,11 +1,22 @@
 import json
 import numpy as np
-from scipy.signal import butter, lfilter, spectrogram
+import pywt
 import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, spectrogram, iirnotch
+from datetime import datetime
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
     """
-    Butterworth 帶通濾波器設計 (同前)。
+    設計一個帶通濾波器。
+    
+    參數：
+    lowcut (float): 低頻截止頻率。
+    highcut (float): 高頻截止頻率。
+    fs (float): 取樣頻率。
+    order (int): 濾波器的階數，預設為5。
+    
+    回傳：
+    b, a (tuple): 濾波器的係數。
     """
     nyq = 0.5 * fs
     low = lowcut / nyq
@@ -15,141 +26,209 @@ def butter_bandpass(lowcut, highcut, fs, order=5):
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     """
-    應用 Butterworth 帶通濾波器 (同前)。
+    使用帶通濾波器對數據進行濾波。
+    
+    參數：
+    data (array): 要處理的訊號。
+    lowcut (float): 低頻截止頻率。
+    highcut (float): 高頻截止頻率。
+    fs (float): 取樣頻率。
+    order (int): 濾波器的階數，預設為5。
+    
+    回傳：
+    array: 濾波後的訊號。
     """
     b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
+    return filtfilt(b, a, data)  # 零相位濾波
 
-def time_frequency_analysis(signal, fs, channel_name, filename_prefix):
+def butter_notch(notch_freq, quality_factor, fs):
     """
-    執行時頻分析並儲存 spectrogram 圖片。
+    設計一個陷波濾波器來去除特定頻率的干擾，例如電源頻率 (60Hz)。
+    
+    參數：
+    notch_freq (float): 陷波頻率 (Hz)，通常為電源干擾頻率，例如 50Hz 或 60Hz。
+    quality_factor (float): 品質因子，決定濾波器的帶寬，較高的值代表較窄的帶寬。
+    fs (float): 取樣頻率。
+    
+    回傳：
+    b, a (tuple): 濾波器的係數。
+    """
+    nyq = 0.5 * fs
+    freq = notch_freq / nyq
+    b, a = iirnotch(freq, quality_factor, fs)
+    return b, a
 
-    Args:
-        signal (np.array): 要分析的訊號資料
-        fs (float): 取樣率 (Hz)
-        channel_name (str): 通道名稱 (例如 'ch3')，用於圖表標題和檔名
-        filename_prefix (str): 檔案名稱前綴，用於區分原始和濾波後訊號
+def butter_notch_filter(data, notch_freq, quality_factor, fs):
     """
-    f, t, Sxx = spectrogram(signal, fs=fs)
+    使用陷波濾波器來去除特定頻率的干擾。
+    
+    參數：
+    data (array): 要處理的訊號。
+    notch_freq (float): 陷波頻率 (Hz)。
+    quality_factor (float): 品質因子，決定濾波器的帶寬。
+    fs (float): 取樣頻率。
+    
+    回傳：
+    array: 濾波後的訊號。
+    """
+    b, a = butter_notch(notch_freq, quality_factor, fs)
+    return filtfilt(b, a, data)
+
+def wavelet_denoise(data, wavelet='db4', level=3, threshold_factor=2.0):
+    """
+    使用小波轉換進行去雜訊處理。
+    
+    參數：
+    data (array): 要處理的訊號。
+    wavelet (str): 小波函數，預設為 'db4'。
+    level (int): 分解層數，影響頻率解析度。
+    threshold_factor (float): 閾值係數，影響去雜訊程度。
+    
+    回傳：
+    array: 去雜訊後的訊號。
+    """
+    coeffs = pywt.wavedec(data, wavelet, level=level)
+    threshold = threshold_factor * np.std(coeffs[-1])
+    coeffs = [pywt.threshold(c, threshold, mode='hard') for c in coeffs]
+    return pywt.waverec(coeffs, wavelet)
+
+def snr(signal, noise):
+    """
+    計算訊號與雜訊的信噪比 (SNR)。
+    
+    參數：
+    signal (array): 原始訊號。
+    noise (array): 雜訊訊號。
+    
+    回傳：
+    float: 訊噪比 (dB)。
+    """
+    power_signal = np.mean(signal ** 2)
+    power_noise = np.mean(noise ** 2)
+    return 10 * np.log10(power_signal / power_noise)
+
+def plot_signal(time_axis, original, filtered, denoised, title_prefix, filename):
+    """
+    繪製原始訊號、濾波後訊號與去雜訊訊號。
+    
+    參數：
+    time_axis (array): 時間軸。
+    original (array): 原始訊號。
+    filtered (array): 濾波後訊號。
+    denoised (array): 去雜訊後訊號。
+    title_prefix (str): 圖片標題前綴。
+    filename (str): 儲存圖片的檔名。
+    """
     plt.figure(figsize=(10, 6))
-    plt.pcolormesh(t, f, 10 * np.log10(Sxx), shading='gouraud') # 顯示功率譜密度 (PSD) in dB
+    plt.subplot(3, 1, 1)
+    plt.plot(time_axis, original, 'b', label='Original Signal')
+    plt.legend(loc='upper right')
+    plt.title(f'{title_prefix} - Original Signal')
+    plt.subplot(3, 1, 2)
+    plt.plot(time_axis, filtered, 'g', label='Filtered Signal')
+    plt.legend(loc='upper right')
+    plt.title(f'{title_prefix} - Filtered Signal')
+    plt.subplot(3, 1, 3)
+    plt.plot(time_axis, denoised, 'r', label='Denoised Signal')
+    plt.legend(loc='upper right')
+    plt.title(f'{title_prefix} - Denoised Signal')
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+
+def time_frequency_analysis(signal, fs, title, filename):
+    """
+    進行時間-頻率分析，計算並繪製信號的頻譜圖。
+    
+    參數:
+    signal (numpy.ndarray): 需要分析的輸入信號。
+    fs (int): 取樣率 (Hz)，用於時間軸和頻率軸的計算。
+    title (str): 圖表的標題。
+    filename (str): 圖片儲存的檔案名稱。
+    """
+    f, t, Sxx = spectrogram(signal, fs=fs, nperseg=fs//2, noverlap=fs//4)
+    plt.figure(figsize=(10, 6))
+    plt.pcolormesh(t, f, 10 * np.log10(Sxx + 1e-10), shading='gouraud')  # 避免 log(0) 問題
     plt.ylabel('Frequency [Hz]')
     plt.xlabel('Time [sec]')
-    plt.title(f'{filename_prefix} {channel_name} Spectrogram')
-    plt.colorbar(label='Power/Frequency [dB/Hz]') # 顏色條標籤
-    plt.tight_layout()
-    plt.savefig(f'{filename_prefix}_{channel_name}_BrainBit_spectrogram.png')
-    plt.close() # 關閉圖形，避免顯示
+    plt.title(f'Spectrogram - {title}')
+    plt.colorbar(label='Power/Frequency [dB/Hz]')
+    plt.savefig(filename)
+    plt.close()
 
-def filter_eeg_data_and_plot(json_file_path, lowcut, highcut, fs, order=5):
-    """
-    讀取 JSON EEG 資料，對 ch3 和 ch4 進行帶通濾波，繪製並儲存原始訊號、濾波後訊號和 spectrogram 圖片。
 
-    Args:
-        json_file_path (str): JSON 檔案路徑
-        lowcut (float): 低頻截止頻率 (Hz)
-        highcut (float): 高頻截止頻率 (Hz)
-        fs (float):  取樣率 (Hz)
-        order (int): 濾波器階數
+def process_json(json_file, channels, fs, lowcut, highcut, order=5):
     """
-    original_ch3_values = []
-    original_ch4_values = []
-    filtered_ch3_values = []
-    filtered_ch4_values = []
+    處理 JSON 格式的 EEG 數據，進行預處理與濾波，並分析時頻特性。
+    
+    參數:
+    json_file (str): 輸入的 JSON 檔案路徑。
+    channels (list of str): 需要處理的通道名稱。
+    fs (int): 取樣率 (Hz)。
+    lowcut (float): 頻帶通濾波的低頻界限 (Hz)。
+    highcut (float): 頻帶通濾波的高頻界限 (Hz)。
+    order (int, 可選): 濾波器的階數，預設為 5。
+    """
+    data = {ch: [] for ch in channels}
     timestamps = []
-
-    with open(json_file_path, 'r') as f:
+    
+    with open(json_file, 'r') as f:
+        timestamps = []
         for line in f:
             try:
-                eeg_data = json.loads(line)
+                record = json.loads(line)
+                # 解析時間戳並轉換為 Unix 時間 (秒)
+                dt = datetime.strptime(record['timeStamp'], "%Y-%m-%d %H-%M-%S-%f")
+                timestamps.append(dt.timestamp())
+                
+                for ch in channels:
+                    data[ch].append(float(record[ch]))
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
 
-                if 'ch3' in eeg_data and 'ch4' in eeg_data and 'timeStamp' in eeg_data:
-                    try:
-                        ch3_value = float(eeg_data['ch3'])
-                        ch4_value = float(eeg_data['ch4'])
-                        timestamp = eeg_data['timeStamp']
+        timestamps = np.array(timestamps)
+        time_axis = timestamps - timestamps[0]  # 轉換為從 0 秒開始的時間軸
 
-                        original_ch3_values.append(ch3_value)
-                        original_ch4_values.append(ch4_value)
-                        timestamps.append(timestamp)
+    for ch in channels:
+        raw_signal = np.array(data[ch])
+        
+        # 進行 60Hz 陷波濾波，消除電源干擾 (品質因子設為 30.0)
+        notched_signal = butter_notch_filter(raw_signal, 60.0, 30.0, fs)
+        
+        # 進行帶通濾波，保留 8-30Hz 頻段 (Alpha + Beta 波段)
+        filtered_signal = butter_bandpass_filter(notched_signal, lowcut, highcut, fs, order)
+        
+        # 使用小波變換進行去雜訊
+        denoised_signal = wavelet_denoise(filtered_signal)
+        
+        # 計算去雜訊前後的差異 (雜訊成分)
+        filtered_diff = filtered_signal - denoised_signal
+        
+        print(f'{ch} SNR: {snr(raw_signal, filtered_signal):.7f} dB (Raw vs. Filtered)')
+        print(f'{ch} SNR: {snr(filtered_signal, denoised_signal):.7f} dB (Filtered vs. Denoised)')
+        print(f'{ch} SNR: {snr(raw_signal, denoised_signal):.7f} dB (Raw vs. Denoised)')
+        
+        # 繪製雜訊信號
+        plt.figure(figsize=(10, 6))
+        plt.plot(time_axis, filtered_diff, 'b', label='Noise Signal')
+        plt.legend(loc='upper right')
+        plt.title(f'{ch} - Noise Signal')
+        plt.savefig(f'{ch}_noise_signal.png')
+        plt.close()
 
-                        ch3_data = np.array([ch3_value])
-                        ch4_data = np.array([ch4_value])
-
-                        filtered_ch3 = butter_bandpass_filter(ch3_data, lowcut, highcut, fs, order)[0]
-                        filtered_ch4 = butter_bandpass_filter(ch4_data, lowcut, highcut, fs, order)[0]
-
-                        filtered_ch3_values.append(filtered_ch3)
-                        filtered_ch4_values.append(filtered_ch4)
-
-                        eeg_data['ch3'] = str(filtered_ch3)
-                        eeg_data['ch4'] = str(filtered_ch4)
-
-                    except ValueError:
-                        print(f"警告: ch3 或 ch4 的值無法轉換為數值，跳過濾波，原始資料為: {eeg_data}")
-                else:
-                    print(f"警告: JSON 資料缺少 ch3, ch4 或 timeStamp 欄位: {eeg_data}")
-
-            except json.JSONDecodeError:
-                print(f"警告: 無法解析 JSON 行: {line.strip()}")
-
-    time_axis = np.arange(len(timestamps))
-
-    # 繪製並儲存原始訊號圖
-    fig_original, axs_original = plt.subplots(2, 1, figsize=(12, 6))
-    axs_original[0].plot(time_axis, original_ch3_values)
-    axs_original[0].set_title('Original Ch3')
-    axs_original[0].set_xlabel('Data Point Index')
-    axs_original[0].set_ylabel('Amplitude')
-    axs_original[0].grid(True)
-
-    axs_original[1].plot(time_axis, original_ch4_values)
-    axs_original[1].set_title('Original Ch4')
-    axs_original[1].set_xlabel('Data Point Index')
-    axs_original[1].set_ylabel('Amplitude')
-    axs_original[1].grid(True)
-
-    plt.tight_layout()
-    plt.savefig('original_ganglion_signal_plots.png')
-    plt.close(fig_original) # 關閉原始訊號圖
-
-    # 繪製並儲存濾波後訊號圖
-    fig_filtered, axs_filtered = plt.subplots(2, 1, figsize=(12, 6))
-    axs_filtered[0].plot(time_axis, filtered_ch3_values)
-    axs_filtered[0].set_title('Filtered Ch3')
-    axs_filtered[0].set_xlabel('Data Point Index')
-    axs_filtered[0].set_ylabel('Amplitude')
-    axs_filtered[0].grid(True)
-
-    axs_filtered[1].plot(time_axis, filtered_ch4_values)
-    axs_filtered[1].set_title('Filtered Ch4')
-    axs_filtered[1].set_xlabel('Data Point Index')
-    axs_filtered[1].set_ylabel('Amplitude')
-    axs_filtered[1].grid(True)
-
-    plt.tight_layout()
-    plt.savefig('filtered_BrainBit_signal_plots.png')
-    plt.close(fig_filtered) # 關閉濾波後訊號圖
-
-    # 進行時頻分析並儲存 spectrogram 圖片
-    original_ch3_array = np.array(original_ch3_values) # Convert lists to numpy arrays for spectrogram function
-    original_ch4_array = np.array(original_ch4_values)
-    filtered_ch3_array = np.array(filtered_ch3_values)
-    filtered_ch4_array = np.array(filtered_ch4_values)
-
-    time_frequency_analysis(original_ch3_array, fs, 'Ch3', 'original')
-    time_frequency_analysis(original_ch4_array, fs, 'Ch4', 'original')
-    time_frequency_analysis(filtered_ch3_array, fs, 'Ch3', 'filtered')
-    time_frequency_analysis(filtered_ch4_array, fs, 'Ch4', 'filtered')
-
+        # 繪製原始、濾波後及去雜訊後的信號圖
+        plot_signal(time_axis, raw_signal, filtered_signal, denoised_signal, f'{ch} Analysis', f'{ch}_analysis.png')
+        
+        # 進行時頻分析並儲存頻譜圖
+        time_frequency_analysis(filtered_signal, fs, f'{ch} Filtered', f'{ch}_filtered_spectrogram.png')
+        time_frequency_analysis(denoised_signal, fs, f'{ch} Denoised', f'{ch}_denoised_spectrogram.png')
 
 if __name__ == "__main__":
-    json_file = 'data/concussionbrainbit_vrca_13_EegSsvep.json'  # 替換成您的 JSON 檔案路徑
-    sampling_rate = 128.0
-    low_frequency = 1.0
-    high_frequency = 40.0
-    filter_order = 5
+    # json_file1 = 'data/concussionganglion_vrca_13_EegSsvep.json'
+    json_file2 = 'data/concussionbrainbit_vrca_13_EegSsvep.json'
+    fs = 250  # 根據 OpenBCI/BrainBit 設定適當的取樣率
+    lowcut, highcut = 8.0, 30.0  # 適合視覺相關的 Alpha + Beta 頻段
 
-    filter_eeg_data_and_plot(json_file, low_frequency, high_frequency, sampling_rate, filter_order)
-    print("圖片已儲存為 original_signal_plots.png, filtered_signal_plots.png, 以及 spectrogram 圖片。")
+    
+    # process_json(json_file1, ['ch4'], fs, lowcut, highcut)  # OpenBCI Ganglion OZ 點位
+    process_json(json_file2, ['ch3', 'ch4'], fs, lowcut, highcut)  # BrainBit ch3, ch4
