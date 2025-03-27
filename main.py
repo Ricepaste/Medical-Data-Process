@@ -220,6 +220,7 @@ def process_json(json_file, channels, fs, lowcut, highcut, order=5):
         plot_signal(time_axis, raw_signal, filtered_signal, denoised_signal, f'{ch} Analysis', f'{ch}_analysis.png')
         
         # 進行時頻分析並儲存頻譜圖
+        time_frequency_analysis(raw_signal, fs, f'{ch} Raw', f'{ch}_raw_spectrogram.png')
         time_frequency_analysis(filtered_signal, fs, f'{ch} Filtered', f'{ch}_filtered_spectrogram.png')
         time_frequency_analysis(denoised_signal, fs, f'{ch} Denoised', f'{ch}_denoised_spectrogram.png')
 
