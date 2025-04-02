@@ -3,6 +3,7 @@ import numpy as np
 import pywt
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, spectrogram, iirnotch
+from sklearn.decomposition import FastICA, PCA
 from datetime import datetime
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
@@ -73,6 +74,78 @@ def butter_notch_filter(data, notch_freq, quality_factor, fs):
     """
     b, a = butter_notch(notch_freq, quality_factor, fs)
     return filtfilt(b, a, data)
+
+def apply_ica(signals, n_components=None):
+    """
+    使用 ICA (獨立成分分析) 來去除雜訊。
+
+    參數：
+    signals (numpy.ndarray): 形狀為 (n_samples, n_channels) 的輸入信號。
+    n_components (int, 可選): ICA 的獨立成分數量，默認為 None (自動選擇)。
+
+    回傳：
+    numpy.ndarray: ICA 淨化後的信號 (與輸入相同形狀)。
+    """
+    ica = FastICA(n_components=n_components, random_state=42)
+    transformed = ica.fit_transform(signals)  # 取得獨立成分
+    cleaned_signals = ica.inverse_transform(transformed)  # 轉回時域
+    return cleaned_signals
+
+def estimate_n_components(eeg_data, variance_threshold=0.99):
+    """
+    使用 PCA 分析，估算應該選擇多少個 ICA 成分。
+    
+    參數：
+    - eeg_data: shape 為 (n_samples, n_channels) 的 EEG 資料。
+    - variance_threshold: 需要保留的變異數比例（預設 99%）。
+    
+    回傳：
+    - n_components: 建議的 ICA 成分數量。
+    """
+    pca = PCA()
+    pca.fit(eeg_data)
+    explained_variance_ratio = np.cumsum(pca.explained_variance_ratio_)
+    n_components = np.argmax(explained_variance_ratio >= variance_threshold) + 1
+    return n_components
+
+def calculate_ICA(data, channels, time_axis, order):
+    """
+    計算 ICA，並將結果與原始信號進行比較並繪圖。
+    
+    參數：
+    data (dict): 包含各通道數據的字典。
+    channels (list): 要處理的通道名稱。
+    time_axis (array): 時間軸數據。
+    order (int): 濾波器的階數。
+    """
+    origin = np.array([data[ch] for ch in channels]).T  # (samples, channels)
+    # 陷波濾波 (60Hz)
+    filtered_matrix = np.array([butter_notch_filter(sig, 60.0, 30.0, fs) for sig in origin.T]).T
+    # 帶通濾波 (8-30Hz)
+    filtered_matrix = np.array([butter_bandpass_filter(sig, lowcut, highcut, fs, order) for sig in filtered_matrix.T]).T
+    
+    denoised_matrix = np.array([wavelet_denoise(sig) for sig in filtered_matrix.T]).T
+
+    # 使用 PCA估算 ICA 應該要有幾個成分
+    n_components = estimate_n_components(filtered_matrix)
+    
+    # 計算 ICA (有經過濾波以及沒有經過濾波的信號)
+    signal_ICA = apply_ica(filtered_matrix, n_components=n_components)
+    origin_ICA = apply_ica(origin, n_components=n_components)
+    
+    # 計算去濾波後以及雜訊後的信號差異 (SNR)
+    print(f'ICA SNR: {snr(origin, origin_ICA):.7f} dB (Original vs. Without filter)')
+    print(f'ICA SNR: {snr(signal_ICA, filtered_matrix):.7f} dB (Filtered vs. ICA)')
+    print(f'ICA SNR: {snr(filtered_matrix, denoised_matrix):.7f} dB (Filtered vs. Denoised)')
+    
+    # 只畫出經過濾波後再進行 ICA 的信號圖
+    for i, ch in enumerate(channels):
+        plt.figure(figsize=(10, 6))
+        plt.plot(time_axis, signal_ICA[:, i], 'g', label='ICA Cleaned Signal')
+        plt.legend()
+        plt.title(f'{ch} - ICA Processed Signal')
+        plt.savefig(f'{ch}_ica_signal.png')
+        plt.close()
 
 def wavelet_denoise(data, wavelet='db4', level=3, threshold_factor=2.0):
     """
@@ -200,6 +273,10 @@ def process_json(json_file, channels, fs, lowcut, highcut, order=5):
         
         # 使用小波變換進行去雜訊
         denoised_signal = wavelet_denoise(filtered_signal)
+        
+        # 計算 ICA (為了比較有無 ICA 的差別，一樣有對訊號做濾波+去噪)
+        # 這部分是獨立出來的，只是想看看 ICA 的效果
+        calculate_ICA(data, channels, time_axis, order)
         
         # 計算去雜訊前後的差異 (雜訊成分)
         filtered_diff = filtered_signal - denoised_signal
