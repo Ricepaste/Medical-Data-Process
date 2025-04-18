@@ -5,7 +5,12 @@ import pywt
 import matplotlib
 
 matplotlib.use("pdf")
+
+import matplotlib
+
+matplotlib.use("pdf")
 import matplotlib.pyplot as plt
+
 from scipy.signal import butter, filtfilt, spectrogram, iirnotch
 from sklearn.decomposition import FastICA, PCA
 from datetime import datetime
